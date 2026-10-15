@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Memory Hog</title>
+<title>Crash</title>
 <style>
   :root{
     --bg:#0a0d0a; --panel:#10140f; --line:#223022; --text:#d7e8d2;
@@ -88,7 +88,7 @@
 <div class="overlay" id="startOverlay">
   <div class="modal">
     <h2>Start eating memory?</h2>
-    <p>This allocates 50MB chunks roughly 8 times a second until it hits 8,000 MB, or until the tab runs out and crashes first. Make sure anything unsaved elsewhere in this tab is safe.</p>
+    <p>This allocates 50MB chunks roughly 8 times a second until it hits 64,000 MB, or until the tab runs out and crashes first. Make sure anything unsaved elsewhere in this tab is safe.</p>
     <div class="row">
       <button id="cancelStart">CANCEL</button>
       <button id="confirmStart" class="stop">START EATING</button>
@@ -98,7 +98,7 @@
 
 <div class="overlay" id="capOverlay">
   <div class="modal">
-    <h2>Hit the 8,000 MB cap</h2>
+    <h2>Hit the 64,000 MB cap</h2>
     <p>That's a lot of RAM gone. Keep going past the cap, or stop here and hold what's already claimed?</p>
     <div class="row">
       <button id="stopAtCap" class="stop">STOP HERE</button>
@@ -109,7 +109,7 @@
 
 <script>
   const CHUNK_MB = 50;
-  const CAP_MB = 8000; // soft ceiling, user can choose to blow past it
+  const CAP_MB = 64000; // soft ceiling, user can choose to blow past it
   let chunks = [];
   let running = false;
   let timer = null;
