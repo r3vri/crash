@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Memory Hog</title>
+<style>
+  :root{
+    --bg:#0a0d0a; --panel:#10140f; --line:#223022; --text:#d7e8d2;
+    --dim:#5c7a57; --accent:#7dff5c; --danger:#ff5c5c;
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light){
+    :root:not([data-theme="dark"]){
+      --bg:#0a0d0a; --panel:#10140f; --line:#223022; --text:#d7e8d2;
+      --dim:#5c7a57; --accent:#7dff5c; --danger:#ff5c5c;
+    }
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family: 'Courier New', ui-monospace, monospace;
+    display:flex; align-items:center; justify-content:center;
+    padding: max(20px, env(safe-area-inset-top,0px)) 20px max(20px, env(safe-area-inset-bottom,0px));
+  }
+  .rig{
+    width:100%; max-width:560px;
+    border:1px solid var(--line); background:var(--panel);
+    padding:28px; position:relative;
+  }
+  .rig::before{
+    content:"MEM-STRESS // LOCAL BROWSER TAB ONLY";
+    position:absolute; top:-11px; left:20px; background:var(--panel);
+    padding:0 8px; font-size:11px; letter-spacing:2px; color:var(--dim);
+  }
+  h1{font-size:22px; margin:0 0 4px; font-weight:700; letter-spacing:0.5px;}
+  p.sub{margin:0 0 24px; color:var(--dim); font-size:13px; line-height:1.5; max-width:70ch;}
+  .readout{
+    font-size:48px; font-weight:700; color:var(--accent);
+    line-height:1; margin-bottom:4px; font-variant-numeric: tabular-nums;
+  }
+  .readout small{font-size:16px; color:var(--dim); font-weight:400;}
+  .bar{height:10px; border:1px solid var(--line); margin:14px 0 22px; overflow:hidden;}
+  .bar div{height:100%; width:0%; background:var(--accent); transition:width .15s linear;}
+  .row{display:flex; gap:10px; flex-wrap:wrap;}
+  button{
+    font-family:inherit; font-size:13px; letter-spacing:1px; padding:12px 18px;
+    background:transparent; border:1px solid var(--line); color:var(--text);
+    cursor:pointer;
+  }
+  button:hover{border-color:var(--accent); color:var(--accent);}
+  button.stop{border-color:var(--danger); color:var(--danger);}
+  button.stop:hover{background:var(--danger); color:#0a0d0a;}
+  button:disabled{opacity:.35; cursor:not-allowed;}
+  .log{margin-top:18px; font-size:12px; color:var(--dim); min-height:18px;}
+  .warn{margin-top:18px; font-size:11.5px; color:var(--dim); border-top:1px dashed var(--line); padding-top:14px; line-height:1.6;}
+  #fog{position:fixed; inset:0; z-index:0; width:100vw; height:100vh;}
+  .rig{z-index:1;}
+  .overlay{position:fixed; inset:0; z-index:5; background:rgba(0,0,0,.6); display:none; align-items:center; justify-content:center; padding:20px;}
+  .overlay.show{display:flex;}
+  .modal{border:1px solid var(--line); background:var(--panel); padding:24px; max-width:420px; width:100%;}
+  .modal h2{margin:0 0 10px; font-size:16px; color:var(--accent);}
+  .modal p{margin:0 0 18px; font-size:13px; color:var(--dim); line-height:1.5;}
+  .modal .row{justify-content:flex-end;}
+</style>
+</head>
+<body>
+<canvas id="fog"></canvas>
+<div class="rig">
+  <h1>Memory Hog</h1>
+  <p class="sub">Allocates ~50MB chunks every tick and holds onto them so they can't be garbage-collected. Only eats this browser tab's memory — stop any time.</p>
+
+  <div class="readout" id="readout">0<small> MB claimed</small></div>
+  <div class="bar"><div id="fill"></div></div>
+
+  <div class="row">
+    <button id="toggle">START EATING</button>
+    <button id="reset" class="stop">RELEASE ALL</button>
+  </div>
+  <div class="log" id="log">idle.</div>
+
+  <div class="warn">
+    Heads up: this will slow down or crash this tab (and possibly the browser) once it runs out of memory to give. Other tabs and your system are generally unaffected, but save anything important first.
+  </div>
+</div>
+
+<div class="overlay" id="startOverlay">
+  <div class="modal">
+    <h2>Start eating memory?</h2>
+    <p>This allocates 50MB chunks roughly 8 times a second until it hits 8,000 MB, or until the tab runs out and crashes first. Make sure anything unsaved elsewhere in this tab is safe.</p>
+    <div class="row">
+      <button id="cancelStart">CANCEL</button>
+      <button id="confirmStart" class="stop">START EATING</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="capOverlay">
+  <div class="modal">
+    <h2>Hit the 8,000 MB cap</h2>
+    <p>That's a lot of RAM gone. Keep going past the cap, or stop here and hold what's already claimed?</p>
+    <div class="row">
+      <button id="stopAtCap" class="stop">STOP HERE</button>
+      <button id="continuePastCap">KEEP GOING</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const CHUNK_MB = 50;
+  const CAP_MB = 8000; // soft ceiling, user can choose to blow past it
+  let chunks = [];
+  let running = false;
+  let timer = null;
+  let capHandled = false;
+
+  const readout = document.getElementById('readout');
+  const fill = document.getElementById('fill');
+  const log = document.getElementById('log');
+  const toggle = document.getElementById('toggle');
+  const reset = document.getElementById('reset');
+
+  function update(){
+    const mb = chunks.length * CHUNK_MB;
+    readout.innerHTML = mb.toLocaleString() + '<small> MB claimed</small>';
+    fill.style.width = Math.min(100, (mb / CAP_MB) * 100) + '%';
+  }
+
+  function eatChunk(){
+    try{
+      const arr = new Uint8Array(CHUNK_MB * 1024 * 1024);
+      for(let i=0; i<arr.length; i+=4096){ arr[i] = 1; } // touch pages so it's actually committed
+      chunks.push(arr);
+      update();
+      if(chunks.length * CHUNK_MB >= CAP_MB && !capHandled){
+        capHandled = true;
+        stop();
+        document.getElementById('capOverlay').classList.add('show');
+      } else {
+        log.textContent = 'allocating...';
+      }
+    } catch(e){
+      log.textContent = 'allocation failed: tab is out of memory. stopping.';
+      stop();
+    }
+  }
+
+  function start(){
+    running = true;
+    toggle.textContent = 'STOP';
+    timer = setInterval(eatChunk, 120);
+  }
+  function stop(){
+    running = false;
+    toggle.textContent = 'START EATING';
+    clearInterval(timer);
+  }
+
+  const startOverlay = document.getElementById('startOverlay');
+  const capOverlay = document.getElementById('capOverlay');
+
+  toggle.addEventListener('click', () => {
+    if(running){ stop(); return; }
+    startOverlay.classList.add('show');
+  });
+  document.getElementById('cancelStart').addEventListener('click', () => startOverlay.classList.remove('show'));
+  document.getElementById('confirmStart').addEventListener('click', () => {
+    startOverlay.classList.remove('show');
+    start();
+  });
+  document.getElementById('stopAtCap').addEventListener('click', () => {
+    capOverlay.classList.remove('show');
+    log.textContent = 'stopped at the cap, holding what was claimed.';
+  });
+  document.getElementById('continuePastCap').addEventListener('click', () => {
+    capOverlay.classList.remove('show');
+    log.textContent = 'pushing past the cap...';
+    start();
+  });
+
+  reset.addEventListener('click', () => {
+    stop();
+    chunks = [];
+    capHandled = false;
+    update();
+    log.textContent = 'released.';
+  });
+
+  update();
+
+  (function(){
+    const canvas = document.getElementById('fog');
+    const gl = canvas.getContext('webgl');
+    if(!gl) return;
+    function resize(){
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      gl.viewport(0,0,canvas.width,canvas.height);
+    }
+    window.addEventListener('resize', resize);
+    resize();
+    const vsSource = 'attribute vec2 p; void main(){ gl_Position = vec4(p,0.0,1.0); }';
+    const fsSource = 'precision highp float; uniform vec2 u_res; uniform float u_time; '+
+      'float noise(vec2 n){ return fract(sin(dot(n, vec2(12.9898,78.233))) * 43758.5453); } '+
+      'float fbm(vec2 p){ float v=0.0; float a=0.5; for(int i=0;i<5;i++){ v+=a*noise(p); p*=2.03; a*=0.5; } return v; } '+
+      'void main(){ vec2 uv = gl_FragCoord.xy / u_res.xy; vec2 p = uv*3.0 + vec2(u_time*0.03, u_time*0.015); '+
+      'float fog = fbm(p + fbm(p*1.7)); vec3 col = mix(vec3(0.02,0.03,0.02), vec3(0.11,0.35,0.08), fog); '+
+      'float vign = smoothstep(1.0, 0.2, length(uv-0.5)); col *= 0.35 + 0.35*vign; gl_FragColor = vec4(col,1.0); }';
+    function compile(type, src){ const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s; }
+    const prog = gl.createProgram();
+    gl.attachShader(prog, compile(gl.VERTEX_SHADER, vsSource));
+    gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fsSource));
+    gl.linkProgram(prog);
+    gl.useProgram(prog);
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+    const pLoc = gl.getAttribLocation(prog, 'p');
+    gl.enableVertexAttribArray(pLoc);
+    gl.vertexAttribPointer(pLoc, 2, gl.FLOAT, false, 0, 0);
+    const resLoc = gl.getUniformLocation(prog, 'u_res');
+    const timeLoc = gl.getUniformLocation(prog, 'u_time');
+    function frame(t){
+      gl.uniform2f(resLoc, canvas.width, canvas.height);
+      gl.uniform1f(timeLoc, t * 0.001);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  })();
+</script>
+</body>
+</html>
